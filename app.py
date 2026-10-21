@@ -235,7 +235,268 @@ categorical_pipeline = next(
 )
 encoder = categorical_pipeline.named_steps["encoder"]
 loc_options = list(encoder.categories_[0])
-dc_options = list(encoder.categories_[1])
+
+# Station catalogue: use the supplied SAPS dataset to keep station names,
+# municipality/district mappings and coordinates consistent. This is metadata
+# for identifying the selected station; the station name is not a model feature.
+STATION_DATA_FILE = Path(__file__).with_name("sapacr-2005-2026-v1.4.csv")
+station_lookup = {}
+if STATION_DATA_FILE.exists():
+    try:
+        station_data = pd.read_csv(
+            STATION_DATA_FILE,
+            usecols=["station", "loc_mn", "dc_mn", "latitude", "longitude"],
+        )
+        station_data = station_data.dropna(subset=["station", "loc_mn", "dc_mn"])
+        station_data["station"] = station_data["station"].astype(str).str.strip().str.lower()
+        station_data = station_data.sort_values("station").drop_duplicates("station", keep="first")
+        for row in station_data.to_dict(orient="records"):
+            station_lookup[row["station"]] = {
+                "loc_mn": str(row["loc_mn"]).strip().lower(),
+                "dc_mn": str(row["dc_mn"]).strip().lower(),
+                "latitude": float(row["latitude"]),
+                "longitude": float(row["longitude"]),
+            }
+    except Exception:
+        station_lookup = {}
+station_options = sorted(station_lookup)
+
+def sync_station_selection():
+    selected_station = st.session_state.get("station_name")
+    details = station_lookup.get(selected_station)
+    if details:
+        # Set values before the related widgets are rendered on the rerun.
+        st.session_state["loc_mn"] = details["loc_mn"]
+        st.session_state["dc_mn"] = details["dc_mn"]
+        st.session_state["latitude"] = details["latitude"]
+        st.session_state["longitude"] = details["longitude"]
+
+def financial_year_label(start_year):
+    return f"{int(start_year)}/{int(start_year) + 1}"
+
+# Municipality-to-district relationships derived from the supplied SAPS dataset.
+# Keep these names consistent with the categories used to train the saved model.
+MUNICIPALITY_DISTRICT_PAIRS = [
+    ('!kheis', 'z f mgcawu'),
+    ('abaqulusi', 'zululand'),
+    ('alfred duma', 'uthukela'),
+    ('amahlathi', 'amathole'),
+    ('ba-phalaborwa', 'mopani'),
+    ('beaufort west', 'central karoo'),
+    ('bela-bela', 'waterberg'),
+    ('bergrivier', 'west coast'),
+    ('big five hlabisa', 'umkhanyakude'),
+    ('bitou', 'garden route'),
+    ('blouberg', 'capricorn'),
+    ('blue crane route', 'sarah baartman'),
+    ('breede valley', 'cape winelands'),
+    ('buffalo city', 'buffalo city'),
+    ('bushbuckridge', 'ehlanzeni'),
+    ('cape agulhas', 'overberg'),
+    ('cederberg', 'west coast'),
+    ('chief albert luthuli', 'gert sibande'),
+    ('city of cape town', 'city of cape town'),
+    ('city of johannesburg', 'city of johannesburg'),
+    ('city of matlosana', 'dr kenneth kaunda'),
+    ('city of mbombela', 'ehlanzeni'),
+    ('city of tshwane', 'city of tshwane'),
+    ('collins chabane', 'vhembe'),
+    ('dannhauser', 'amajuba'),
+    ('dawid kruiper', 'z f mgcawu'),
+    ('dihlabeng', 'thabo mofutsanyane'),
+    ('dikgatlong', 'frances baard'),
+    ('dipaleseng', 'gert sibande'),
+    ('ditsobotla', 'ngaka modiri molema'),
+    ('dr beyers naude', 'sarah baartman'),
+    ('dr js moroka', 'nkangala'),
+    ('dr nkosazana dlamini zuma', 'harry gwala'),
+    ('dr pixley ka isaka seme', 'gert sibande'),
+    ('drakenstein', 'cape winelands'),
+    ('edumbe', 'zululand'),
+    ('ekurhuleni', 'ekurhuleni'),
+    ('elias motsoaledi', 'sekhukhune'),
+    ('elundini', 'joe gqabi'),
+    ('emadlangeni', 'amajuba'),
+    ('emakhazeni', 'nkangala'),
+    ('emalahleni', 'chris hani'),
+    ('emalahleni', 'nkangala'),
+    ('emfuleni', 'sedibeng'),
+    ('emthanjeni', 'pixley ka seme'),
+    ('endumeni', 'umzinyathi'),
+    ('engcobo', 'chris hani'),
+    ('enoch mgijima', 'chris hani'),
+    ('ephraim mogale', 'sekhukhune'),
+    ('ethekwini', 'ethekwini'),
+    ('fetakgomo tubatse', 'sekhukhune'),
+    ('ga-segonyana', 'john taolo gaetsewe'),
+    ('george', 'garden route'),
+    ('govan mbeki', 'gert sibande'),
+    ('great kei', 'amathole'),
+    ('greater giyani', 'mopani'),
+    ('greater kokstad', 'harry gwala'),
+    ('greater letaba', 'mopani'),
+    ('greater taung', 'dr ruth segomotsi mompati'),
+    ('greater tzaneen', 'mopani'),
+    ('hantam', 'namakwa'),
+    ('hessequa', 'garden route'),
+    ('impendle', 'umgungundlovu'),
+    ('inkosi langalibalele', 'uthukela'),
+    ('intsika yethu', 'chris hani'),
+    ('inxuba yethemba', 'chris hani'),
+    ('jb marks', 'dr kenneth kaunda'),
+    ('joe morolong', 'john taolo gaetsewe'),
+    ('jozini', 'umkhanyakude'),
+    ('kagisano/molopo', 'dr ruth segomotsi mompati'),
+    ('kai !garib', 'z f mgcawu'),
+    ('kamiesberg', 'namakwa'),
+    ('kannaland', 'garden route'),
+    ('kareeberg', 'pixley ka seme'),
+    ('karoo hoogland', 'namakwa'),
+    ('kgatelopele', 'z f mgcawu'),
+    ('kgetlengrivier', 'bojanala'),
+    ('khâi-ma', 'namakwa'),
+    ('king sabata dalindyebo', 'o.r.tambo'),
+    ('knysna', 'garden route'),
+    ('kopanong', 'xhariep'),
+    ('kou-kamma', 'sarah baartman'),
+    ('kouga', 'sarah baartman'),
+    ('kwadukuza', 'ilembe'),
+    ('laingsburg', 'central karoo'),
+    ('langeberg', 'cape winelands'),
+    ('lekwa', 'gert sibande'),
+    ('lekwa-teemane', 'dr ruth segomotsi mompati'),
+    ('lepele-nkumpi', 'capricorn'),
+    ('lephalale', 'waterberg'),
+    ('lesedi', 'sedibeng'),
+    ('letsemeng', 'xhariep'),
+    ('local municipality of madibeng', 'bojanala'),
+    ('mafikeng', 'ngaka modiri molema'),
+    ('mafube', 'fezile dabi'),
+    ('magareng', 'frances baard'),
+    ('makana', 'sarah baartman'),
+    ('makhado', 'vhembe'),
+    ('makhuduthamaga', 'sekhukhune'),
+    ('maluti a phofung', 'thabo mofutsanyane'),
+    ('mamusa', 'dr ruth segomotsi mompati'),
+    ('mandeni', 'ilembe'),
+    ('mangaung', 'mangaung'),
+    ('mantsopa', 'thabo mofutsanyane'),
+    ('maphumulo', 'ilembe'),
+    ('maquassi hills', 'dr kenneth kaunda'),
+    ('maruleng', 'mopani'),
+    ('masilonyana', 'lejweleputswa'),
+    ('matatiele', 'alfred nzo'),
+    ('matjhabeng', 'lejweleputswa'),
+    ('matzikama', 'west coast'),
+    ('mbhashe', 'amathole'),
+    ('mbizana', 'alfred nzo'),
+    ('merafong city', 'west rand'),
+    ('metsimaholo', 'fezile dabi'),
+    ('mfolozi', 'king cetshwayo'),
+    ('mhlontlo', 'o.r.tambo'),
+    ('midvaal', 'sedibeng'),
+    ('mkhambathini', 'umgungundlovu'),
+    ('mkhondo', 'gert sibande'),
+    ('mnquma', 'amathole'),
+    ('modimolle-mookgophong', 'waterberg'),
+    ('mogalakwena', 'waterberg'),
+    ('mogale city', 'west rand'),
+    ('mohokare', 'xhariep'),
+    ('molemole', 'capricorn'),
+    ('moqhaka', 'fezile dabi'),
+    ('moretele', 'bojanala'),
+    ('moses kotane', 'bojanala'),
+    ('mossel bay', 'garden route'),
+    ('mpofana', 'umgungundlovu'),
+    ('msinga', 'umzinyathi'),
+    ('msukaligwa', 'gert sibande'),
+    ('mthonjaneni', 'king cetshwayo'),
+    ('mtubatuba', 'umkhanyakude'),
+    ('musina', 'vhembe'),
+    ('nala', 'lejweleputswa'),
+    ('naledi', 'dr ruth segomotsi mompati'),
+    ('nama khoi', 'namakwa'),
+    ('ndlambe', 'sarah baartman'),
+    ('ndwedwe', 'ilembe'),
+    ('nelson mandela bay', 'nelson mandela bay'),
+    ('newcastle', 'amajuba'),
+    ('ngqushwa', 'amathole'),
+    ('ngquza hill', 'o.r.tambo'),
+    ('ngwathe', 'fezile dabi'),
+    ('nkandla', 'king cetshwayo'),
+    ('nketoana', 'thabo mofutsanyane'),
+    ('nkomazi', 'ehlanzeni'),
+    ('nongoma', 'zululand'),
+    ('nqutu', 'umzinyathi'),
+    ('ntabankulu', 'alfred nzo'),
+    ('nyandeni', 'o.r.tambo'),
+    ('okhahlamba', 'uthukela'),
+    ('oudtshoorn', 'garden route'),
+    ('overstrand', 'overberg'),
+    ('phokwane', 'frances baard'),
+    ('phumelela', 'thabo mofutsanyane'),
+    ('polokwane', 'capricorn'),
+    ('port st johns', 'o.r.tambo'),
+    ('prince albert', 'central karoo'),
+    ('ramotshere moiloa', 'ngaka modiri molema'),
+    ('rand west city', 'west rand'),
+    ('ratlou', 'ngaka modiri molema'),
+    ('ray nkonyeni', 'ugu'),
+    ('raymond mhlaba', 'amathole'),
+    ('renosterberg', 'pixley ka seme'),
+    ('richmond', 'umgungundlovu'),
+    ('richtersveld', 'namakwa'),
+    ('rustenburg', 'bojanala'),
+    ('sakhisizwe', 'chris hani'),
+    ('saldanha bay', 'west coast'),
+    ('senqu', 'joe gqabi'),
+    ('setsoto', 'thabo mofutsanyane'),
+    ('siyancuma', 'pixley ka seme'),
+    ('siyathemba', 'pixley ka seme'),
+    ('sol plaatje', 'frances baard'),
+    ('stellenbosch', 'cape winelands'),
+    ('steve tshwete', 'nkangala'),
+    ('sundays river valley', 'sarah baartman'),
+    ('swartland', 'west coast'),
+    ('swellendam', 'overberg'),
+    ('thaba chweu', 'ehlanzeni'),
+    ('thabazimbi', 'waterberg'),
+    ('the msunduzi', 'umgungundlovu'),
+    ('theewaterskloof', 'overberg'),
+    ('thembelihle', 'pixley ka seme'),
+    ('thembisile', 'nkangala'),
+    ('thulamela', 'vhembe'),
+    ('tokologo', 'lejweleputswa'),
+    ('tsantsabane', 'z f mgcawu'),
+    ('tswaing', 'ngaka modiri molema'),
+    ('tswelopele', 'lejweleputswa'),
+    ('ubuhlebezwe', 'harry gwala'),
+    ('ubuntu', 'pixley ka seme'),
+    ('ulundi', 'zululand'),
+    ('umdoni', 'ugu'),
+    ('umhlabuyalingana', 'umkhanyakude'),
+    ('umhlathuze', 'king cetshwayo'),
+    ('umlalazi', 'king cetshwayo'),
+    ('umngeni', 'umgungundlovu'),
+    ('umshwathi', 'umgungundlovu'),
+    ('umsobomvu', 'pixley ka seme'),
+    ('umuziwabantu', 'ugu'),
+    ('umvoti', 'umzinyathi'),
+    ('umzimkhulu', 'harry gwala'),
+    ('umzumbe', 'ugu'),
+    ('uphongolo', 'zululand'),
+    ('victor khanye', 'nkangala'),
+    ('walter sisulu', 'joe gqabi'),
+    ('witzenberg', 'cape winelands'),
+]
+districts_by_local = {}
+for local_name, district_name in MUNICIPALITY_DISTRICT_PAIRS:
+    districts_by_local.setdefault(local_name, set()).add(district_name)
+districts_by_local = {
+    local_name: sorted(district_names)
+    for local_name, district_names in districts_by_local.items()
+}
+
 
 
 def readable_label(feature):
@@ -257,7 +518,8 @@ def feature_icon(feature):
 def number_input_with_icon(feature, label=None, **kwargs):
     field_label = label or readable_label(feature)
     st.markdown(f'<div class="custom-field-label">{field_label}</div>', unsafe_allow_html=True)
-    icon_col, input_col = st.columns([0.115, 0.885], gap="small", vertical_alignment="center")
+    # Number fields: slightly wider icon column so the input is not touching the icon.
+    icon_col, input_col = st.columns([0.09, 0.91], gap="small", vertical_alignment="center")
     with icon_col:
         st.markdown(
             f'<div class="field-icon" title="{field_label}">{feature_icon(feature)}</div>',
@@ -268,7 +530,9 @@ def number_input_with_icon(feature, label=None, **kwargs):
 
 def selectbox_with_icon(feature, label, options, **kwargs):
     st.markdown(f'<div class="custom-field-label">{label}</div>', unsafe_allow_html=True)
-    icon_col, input_col = st.columns([0.115, 0.885], gap="small", vertical_alignment="center")
+    # Select fields: narrower icon column so long selects sit closer to the icon.
+    icon_ratio = 0.045 if feature == "station" else 0.075
+    icon_col, input_col = st.columns([icon_ratio, 1 - icon_ratio], gap="small", vertical_alignment="center")
     with icon_col:
         st.markdown(
             f'<div class="field-icon" title="{label}">{feature_icon(feature)}</div>',
@@ -352,18 +616,41 @@ section[data-testid="stSidebar"] + div,
 </style>
 """, unsafe_allow_html=True)
 
+# Ensure list content on secondary pages is readable on the white cards.
+st.markdown(r"""
+<style>
+.secondary-readable-list,
+.secondary-readable-list li {
+    color: #233b5d !important;
+    opacity: 1 !important;
+}
+.secondary-readable-list {
+    margin: 0.55rem 0 0.15rem 1.15rem !important;
+    padding-left: 1.1rem !important;
+}
+.secondary-readable-list li {
+    margin: 0.45rem 0 !important;
+    line-height: 1.55 !important;
+    font-size: 0.95rem !important;
+}
+.secondary-readable-list li::marker {
+    color: #1761c5 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 if page != "Predict Risk":
     st.markdown('<div class="hero"><div class="hero-eyebrow">South African Police Service</div><h1>Serious Violent Crime Risk Predictor</h1><p>Machine-learning decision support using historical police-station crime records.</p></div>', unsafe_allow_html=True)
     if page == "About the Project":
         st.markdown('<div class="section-card"><div class="panel-title">About the Project</div><p>This project uses historical police-station crime records to classify a station-year observation as Higher Risk or Lower Risk for serious violent crime in the following financial year.</p><p>The intended stakeholder is SAPS. The system is a prototype for analytical decision support, not a replacement for professional judgement.</p></div>', unsafe_allow_html=True)
     elif page == "How to Use":
-        st.markdown('<div class="section-card"><div class="panel-title">How to Use</div><ol><li>Select the local and district municipality.</li><li>Enter the station coordinates and financial year.</li><li>Enter non-negative counts for the six main crime categories.</li><li>Expand “Other Crime Categories” and enter the remaining crime counts if available.</li><li>Click <b>Predict Risk</b> and review the classification and probability.</li></ol></div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-card"><div class="panel-title">How to Use</div><ol class="secondary-readable-list"><li>Select the police station; its municipality, district and coordinates are populated from the dataset.</li><li>Enter the input financial year and crime counts. The result shows the following financial year being predicted.</li><li>Enter non-negative counts for the six main crime categories.</li><li>Expand “Other Crime Categories” and enter the remaining crime counts if available.</li><li>Click <b>Predict Risk</b> and review the classification and probability.</li></ol></div>', unsafe_allow_html=True)
     elif page == "Data Information":
         st.markdown('<div class="section-card"><div class="panel-title">Data Information</div><p>The model was developed using SAPS annual crime records. It uses crime counts, municipality information, coordinates and the financial-year index.</p><p>Negative crime counts are invalid. Missing or invalid values should be checked against the original source before operational use.</p></div>', unsafe_allow_html=True)
     elif page == "Model Information":
         st.markdown('<div class="section-card"><div class="panel-title">Model Information</div><p><b>Final model:</b> Multi-Layer Perceptron (MLP) neural network.</p><p><b>Validation Macro-F1:</b> 96.44%.</p><p><b>2024 test accuracy:</b> 97.09%.</p><p><b>2024 test Macro-F1:</b> 96.38%.</p><p>The saved pipeline applies the required preprocessing and prediction steps.</p></div>', unsafe_allow_html=True)
     elif page == "Responsible Use":
-        st.markdown('<div class="section-card"><div class="panel-title">Responsible Use</div><p>Predictions reflect patterns learned from historical recorded crime data. They do not establish causes and do not guarantee future outcomes.</p><ul><li>Do not use predictions as the sole basis for decisions about individuals or communities.</li><li>Consider local context and other reliable information.</li><li>Monitor performance, data quality and fairness over time.</li><li>Revalidate the model before operational use.</li></ul></div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-card"><div class="panel-title">Responsible Use</div><p>Predictions reflect patterns learned from historical recorded crime data. They do not establish causes and do not guarantee future outcomes.</p><ul class="secondary-readable-list"><li>Do not use predictions as the sole basis for decisions about individuals or communities.</li><li>Consider local context and other reliable information.</li><li>Monitor performance, data quality and fairness over time.</li><li>Revalidate the model before operational use.</li></ul></div>', unsafe_allow_html=True)
     st.stop()
 
 # ---------------------------------------------------------
@@ -388,25 +675,63 @@ if "crime_prediction_result" not in st.session_state:
     st.session_state.crime_prediction_result = None
 
 with left:
-    with st.form("risk_prediction_form", clear_on_submit=False):
-        st.markdown('<div class="section-card"><div class="section-title"><span class="step">1</span>Police Station Information</div><div class="section-subtitle">Select the municipality and district for the police station.</div>', unsafe_allow_html=True)
-        station_col1, station_col2 = st.columns(2)
-        with station_col1:
-            loc_mn = selectbox_with_icon("loc_mn", "Local Municipality", loc_options, index=None, placeholder="Select local municipality")
-        with station_col2:
-            dc_mn = selectbox_with_icon("dc_mn", "District Municipality", dc_options, index=None, placeholder="Select district municipality")
-        st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-card"><div class="section-title"><span class="step">1</span>Police Station Information</div><div class="section-subtitle">Select the police station. Its municipality, district and coordinates will be filled from the supplied dataset.</div>', unsafe_allow_html=True)
+    if station_options:
+        station_name = selectbox_with_icon(
+            "station",
+            "Police Station",
+            station_options,
+            index=None,
+            placeholder="Search and select a police station",
+            format_func=lambda value: value.title() if value else value,
+            key="station_name",
+            on_change=sync_station_selection,
+        )
+    else:
+        station_name = None
+        st.warning("The station catalogue could not be loaded. Place sapacr-2005-2026-v1.4.csv beside app.py to enable station selection.")
 
-        st.markdown('<div class="section-card"><div class="section-title"><span class="step">2</span>Geographic Location</div><div class="section-subtitle">Enter the approximate geographic coordinates for the police station.</div>', unsafe_allow_html=True)
-        geo_col1, geo_col2, geo_col3 = st.columns([1, 1, 1])
-        with geo_col1:
-            latitude = number_input_with_icon("latitude", "Latitude", min_value=-35.0, max_value=-20.0, value=-26.2041, step=0.0001, format="%.6f", help="South African latitude values are generally negative.")
-        with geo_col2:
-            longitude = number_input_with_icon("longitude", "Longitude", min_value=16.0, max_value=33.0, value=28.0473, step=0.0001, format="%.6f", help="South African longitude values are generally positive.")
-        with geo_col3:
-            start_year = number_input_with_icon("start_year", "Financial Year", min_value=2005, max_value=2024, value=2024, step=1)
-        st.markdown('</div>', unsafe_allow_html=True)
+    station_col1, station_col2 = st.columns(2)
+    with station_col1:
+        loc_mn = selectbox_with_icon(
+            "loc_mn",
+            "Local Municipality",
+            loc_options,
+            index=None,
+            placeholder="Select a police station first" if station_options and not station_name else "Select local municipality",
+            disabled=bool(station_options),
+            key="loc_mn",
+        )
 
+    district_options = districts_by_local.get(loc_mn, []) if loc_mn else []
+    # Clear a previous district if it does not belong to the selected local municipality.
+    if "dc_mn" in st.session_state and st.session_state["dc_mn"] not in district_options:
+        st.session_state["dc_mn"] = None
+
+    with station_col2:
+        dc_mn = selectbox_with_icon(
+            "dc_mn",
+            "District Municipality",
+            district_options,
+            index=None,
+            placeholder="Select a police station first" if station_options and not station_name else ("Select a local municipality first" if not loc_mn else "Select district municipality"),
+            disabled=bool(station_options) or not bool(loc_mn),
+            key="dc_mn",
+        )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="section-card"><div class="section-title"><span class="step">2</span>Geographic Location</div><div class="section-subtitle">Coordinates are populated from the selected station; verify them if you have a more reliable source.</div>', unsafe_allow_html=True)
+    geo_col1, geo_col2, geo_col3 = st.columns([1, 1, 1])
+    with geo_col1:
+        latitude = number_input_with_icon("latitude", "Latitude", min_value=-35.0, max_value=-20.0, value=-26.2041, step=0.0001, format="%.6f", key="latitude", help="South African latitude values are generally negative. Selecting a station fills its recorded coordinates.")
+    with geo_col2:
+        longitude = number_input_with_icon("longitude", "Longitude", min_value=16.0, max_value=33.0, value=28.0473, step=0.0001, format="%.6f", key="longitude", help="South African longitude values are generally positive. Selecting a station fills its recorded coordinates.")
+    with geo_col3:
+        start_year = number_input_with_icon("start_year", "Input Financial Year (start year)", min_value=2005, max_value=2035, value=2024, step=1, help="Enter the first year of the financial year for which crime counts are supplied. The model predicts the following financial year; years beyond the historical test period are not independently validated.")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Crime widgets are inside a form so editing a value does not rerun/reload the page.
+    with st.form("crime_prediction_form", clear_on_submit=False):
         st.markdown('<div class="section-card"><div class="section-title"><span class="step">3</span>Crime Information</div><div class="section-subtitle">Enter the number of reported cases for each crime category in the financial year.</div>', unsafe_allow_html=True)
         core_features = ["murder", "attempted_murder", "rape", "sexual_assault", "assault_gbh", "kidnapping"]
         core_features = [f for f in core_features if f in crime_features]
@@ -431,8 +756,12 @@ with left:
         submitted = st.form_submit_button("📊  Predict Risk", use_container_width=True)
 
     if submitted:
-        if not loc_mn or not dc_mn:
-            st.session_state.crime_prediction_result = {"error": "Please select both a local municipality and a district municipality."}
+        if station_options and not station_name:
+            st.session_state.crime_prediction_result = {"error": "Please select a police station before making a prediction."}
+        elif not loc_mn or not dc_mn:
+            st.session_state.crime_prediction_result = {"error": "Please select a police station and confirm its municipality and district."}
+        elif dc_mn not in districts_by_local.get(loc_mn, []):
+            st.session_state.crime_prediction_result = {"error": "The selected district does not match the selected local municipality. Please check your selections."}
         elif latitude == 0.0 or longitude == 0.0:
             st.session_state.crime_prediction_result = {"error": "Please enter valid latitude and longitude values."}
         elif any(value < 0 for value in user_inputs.values()):
@@ -452,9 +781,11 @@ with left:
                 st.session_state.crime_prediction_result = {
                     "prediction": prediction,
                     "confidence": confidence,
+                    "station": station_name.title() if station_name else "Not specified",
                     "municipality": loc_mn,
                     "district": dc_mn,
                     "year": int(start_year),
+                    "predicted_year": int(start_year) + 1,
                 }
             except Exception as exc:
                 st.session_state.crime_prediction_result = {"error": "The prediction could not be completed. Please check your inputs and try again.", "detail": str(exc)}
@@ -479,9 +810,17 @@ with right:
         st.metric("Prediction probability", f"{result['confidence'] * 100:.1f}%")
         st.caption("Probability assigned by the model to the predicted class; it is not a guarantee of the future outcome.")
         st.markdown("**Station details**")
-        st.write(f"Municipality: {result['municipality']}")
-        st.write(f"District: {result['district']}")
-        st.write(f"Input financial year: {result['year']}")
+        st.write(f"Police station: {result.get('station', 'Not specified')}")
+        st.write(f"Municipality: {result['municipality'].title()}")
+        st.write(f"District: {result['district'].title()}")
+        st.write(f"Input financial year: {financial_year_label(result['year'])}")
+        st.markdown(
+            f'<div style="margin-top:10px;padding:13px 15px;border-radius:12px;background:#e5f1ff;border:1px solid #c7dffb;color:#173e70">'
+            f'<div style="font-size:.82rem;font-weight:700">PREDICTED RISK YEAR</div>'
+            f'<div style="font-size:1.55rem;font-weight:800;color:#1761c5">{financial_year_label(result["predicted_year"])}</div>'
+            f'<div style="font-size:.78rem">The financial year immediately after the input data year.</div></div>',
+            unsafe_allow_html=True,
+        )
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="section-card"><div class="panel-title">💡 &nbsp; Interpretation</div>', unsafe_allow_html=True)
